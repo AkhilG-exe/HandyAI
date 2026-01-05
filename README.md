@@ -48,8 +48,5 @@ python -m http.server 8000
 **Contributing**
 - Suggestions, bug reports, and PRs are welcome. Start by opening an issue describing the change.
 
-**License & Credits**
-- MIT-style permissive use (add LICENSE if desired).
+**Credits**
 - Hand detection powered by MediaPipe; ML support via TensorFlow.js.
-
-Enjoy — want me to add a demo GIF, a small screenshot, or a `package.json` for optional tooling?"}
