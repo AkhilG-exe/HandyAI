@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>ASL Fingerspelling — Real-time</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<main class="container">
+		<section class="card">
+			<header class="card__header">
+				<h1>ASL Fingerspelling — Real-time</h1>
+				<div class="controls">
+					<button id="loginBtn" class="btn small">Login</button>
+					<button id="recordModeBtn" class="btn small hidden">Record Samples</button>
+					<button id="logoutBtn" class="btn small hidden">Logout</button>
+					<span class="userLabel">User: <strong id="currentUser">Guest</strong></span>
+					<button id="clearStorage" class="btn small">Clear Templates</button>
+					<button id="downloadTemplates" class="btn small">Export</button>
+					<button id="loadModelBtn" class="btn small">Load Model</button>
+					<button id="trainModelBtn" class="btn small">Train Model</button>
+					<input id="importFile" type="file" accept="application/json" class="hidden" />
+					<button id="importBtn" class="btn small">Import</button>
+				</div>
+			</header>
+
+			<div class="videoWrap">
+				<video id="video" autoplay playsinline muted></video>
+				<canvas id="overlay"></canvas>
+			</div>
+
+			<div class="info">
+				<p>Press a letter key (A–Z) to record a template for that letter. Record multiple samples per letter for better accuracy.</p>
+			</div>
+
+			<div class="translate">
+				<div class="typing" id="translated">—</div>
+			</div>
+
+			<footer class="legend">
+				<span>Hand detected: <strong id="handState">No</strong></span>
+				<span>Samples: <strong id="sampleCount">0</strong></span>
+			</footer>
+		</section>
+	</main>
+
+	<!-- Login Modal -->
+	<div id="loginModal" class="modal hidden">
+	  <div class="modal__panel">
+	    <h2>Sign in</h2>
+	    <label>Username</label>
+	    <input id="usernameInput" type="text" value="admin" />
+	    <label>Password</label>
+	    <input id="passwordInput" type="password" value="" />
+	    <div class="modal__actions">
+	      <button id="loginConfirm" class="btn">Login</button>
+	      <button id="loginCancel" class="btn">Cancel</button>
+	    </div>
+	    <p class="muted">Use username <strong>admin</strong> and password <strong>1234</strong></p>
+	  </div>
+	</div>
+
+	<!-- Recorder Section (hidden by default) -->
+	<section id="recorder" class="modal hidden">
+	  <div class="modal__panel">
+	    <h2>Record Samples — Your Account</h2>
+	    <p class="muted">Click a letter to capture the current hand pose as a sample for that letter. Capture multiple samples per letter.</p>
+	    <div id="letterGrid" class="letter-grid"></div>
+	    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+	      <button id="recDoneBtn" class="btn">Done</button>
+	      <button id="recClearLetter" class="btn">Clear Letter</button>
+	    </div>
+	  </div>
+	</section>
+
+	<!-- MediaPipe -->
+	<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+	<!-- TensorFlow.js -->
+	<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+
+
+	<script src="app.js"></script>
+</body>
+</html>
