@@ -37,7 +37,6 @@ python -m http.server 8000
 **Files**
 - **Project entry:** [index.html](index.html)
 - **Main logic:** [app.js](app.js)
-- **Hand utilities:** [handsigns.js](handsigns.js)
 - **Styles:** [style.css](style.css)
 
 **Tips & Troubleshooting**
