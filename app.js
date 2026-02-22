@@ -336,28 +336,49 @@ function classify(features, landmarks){
       const idx = arr.indexOf(Math.max(...arr));
       // map idx back to label: use templates keys order
       const keys = Object.keys(templates).filter(k=>templates[k] && templates[k].length);
-      if(keys[idx]) return {letter: keys[idx], score: 1-arr[idx]};
+      if(keys[idx]) return {letter: keys[idx], score: 1-arr[idx], confidence: arr[idx], source:'model'};
     }catch(e){ console.warn('Model predict failed', e); }
   }
 
-  const rule = ruleBasedClassify(features, landmarks);
-  if(rule) return {letter:rule, score:0};
-
-  // nearest-neighbor against stored templates (average per letter)
-  let best = {letter:'—',score:Infinity};
+  // weighted KNN against per-letter samples
+  const neighbors = [];
   for(const [letter, samples] of Object.entries(templates)){
     if(!samples || !samples.length) continue;
     const numericSamples = samples.filter(s => Array.isArray(s));
-    if(numericSamples.length===0) continue;
-    const mean = numericSamples[0].slice();
-    for(let i=1;i<numericSamples.length;i++) for(let j=0;j<mean.length;j++) mean[j]+=numericSamples[i][j];
-    for(let j=0;j<mean.length;j++) mean[j]/=numericSamples.length;
-    let s=0; for(let k=0;k<mean.length;k++){ const d=(features[k]-mean[k]); s+=d*d; }
-    s=Math.sqrt(s);
-    if(s<best.score){ best={letter,score:s}; }
+    for(const sample of numericSamples){
+      const len = Math.min(features.length, sample.length);
+      if(!len) continue;
+      let s=0;
+      for(let k=0;k<len;k++){ const d=(features[k]-sample[k]); s+=d*d; }
+      neighbors.push({letter, distance:Math.sqrt(s/len)});
+    }
   }
-  if(best.score>0.45) return {letter:'?',score:best.score};
-  return {letter:best.letter, score:best.score};
+
+  if(!neighbors.length){
+    const rule = ruleBasedClassify(features, landmarks);
+    return rule ? {letter:rule, score:0.2, confidence:0.5, source:'rule'} : {letter:'—', score:Infinity, confidence:0, source:'none'};
+  }
+
+  neighbors.sort((a,b)=>a.distance-b.distance);
+  const top = neighbors.slice(0, Math.min(9, neighbors.length));
+  const votes = {};
+  top.forEach(n=>{
+    const w = 1/(n.distance + 1e-6);
+    votes[n.letter] = (votes[n.letter] || 0) + w;
+  });
+  const ranked = Object.entries(votes).sort((a,b)=>b[1]-a[1]);
+  const [bestLetter, bestVote] = ranked[0] || ['?',0];
+  const secondVote = ranked[1] ? ranked[1][1] : 0;
+  const confidence = bestVote/(bestVote+secondVote+1e-6);
+  const bestDistance = top.find(n=>n.letter===bestLetter)?.distance ?? Infinity;
+
+  if((confidence < 0.58 || bestDistance > 0.42) && landmarks){
+    const rule = ruleBasedClassify(features, landmarks);
+    if(rule) return {letter:rule, score:bestDistance, confidence:Math.max(0.4, confidence), source:'rule+tiebreak'};
+  }
+
+  if(bestDistance>0.5) return {letter:'?', score:bestDistance, confidence, source:'knn'};
+  return {letter:bestLetter, score:bestDistance, confidence, source:'knn'};
 }
 
 // Keyboard recording
@@ -366,8 +387,9 @@ window.addEventListener('keydown', e=>{
   if(k.length===1 && k>='A' && k<='Z'){
     if(!lastFeatures){ alert('No hand/features detected to record. Show the letter to the camera first.'); return; }
     if(!currentUser){ alert('Please login as a user to save templates (admin / 1234).'); return; }
+    const sample = averagedRecentFeatures(8) || lastFeatures.slice();
     templates[k] = templates[k] || [];
-    templates[k].push(lastFeatures.slice());
+    templates[k].push(sample);
     saveTemplates();
   }
 });
@@ -386,11 +408,67 @@ hands.setOptions({
 
 let lastFeatures = null;
 let lastPrediction = null;
+let smoothedLandmarks = null;
+
+const ROLLING_FEATURE_BUFFER_SIZE = 18;
+const rollingFeatures = [];
+
+function pushRollingFeature(featureVec){
+  if(!Array.isArray(featureVec)) return;
+  rollingFeatures.push(featureVec.slice());
+  if(rollingFeatures.length > ROLLING_FEATURE_BUFFER_SIZE) rollingFeatures.shift();
+}
+
+function averagedRecentFeatures(windowSize = 8){
+  if(!rollingFeatures.length) return null;
+  const window = rollingFeatures.slice(-Math.min(windowSize, rollingFeatures.length));
+  const len = window[0].length;
+  const avg = new Array(len).fill(0);
+  window.forEach(vec=>{
+    for(let i=0;i<len;i++) avg[i] += vec[i] || 0;
+  });
+  for(let i=0;i<len;i++) avg[i] /= window.length;
+  return avg;
+}
+
+function smoothLandmarks(next){
+  if(!next || !next.length) return null;
+  if(!smoothedLandmarks || smoothedLandmarks.length !== next.length){
+    smoothedLandmarks = next.map(pt => ({x:pt.x, y:pt.y, z:pt.z}));
+    return smoothedLandmarks;
+  }
+  const alpha = 0.55;
+  for(let i=0;i<next.length;i++){
+    smoothedLandmarks[i].x = alpha * next[i].x + (1-alpha) * smoothedLandmarks[i].x;
+    smoothedLandmarks[i].y = alpha * next[i].y + (1-alpha) * smoothedLandmarks[i].y;
+    smoothedLandmarks[i].z = alpha * next[i].z + (1-alpha) * smoothedLandmarks[i].z;
+  }
+  return smoothedLandmarks;
+}
 
 // stability/debounce: require N consecutive identical frames
 let stableLetter = '';
 let stableCount = 0;
-const STABLE_REQUIRED = 5;
+const STABLE_REQUIRED = 4;
+const voteWindow = [];
+const VOTE_WINDOW_SIZE = 7;
+
+function pushVote(letter, confidence){
+  if(!letter || letter === '—') return;
+  voteWindow.push({letter, confidence: confidence ?? 0.5});
+  if(voteWindow.length > VOTE_WINDOW_SIZE) voteWindow.shift();
+}
+
+function getWindowWinner(){
+  if(!voteWindow.length) return null;
+  const totals = {};
+  voteWindow.forEach(v=>{
+    totals[v.letter] = (totals[v.letter] || 0) + Math.max(0.2, v.confidence || 0.5);
+  });
+  const ranked = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  if(!ranked.length) return null;
+  return ranked[0][0];
+}
 // recording mode flag
 let recordingMode = false;
 let currentRecordingLetter = null;
@@ -404,19 +482,24 @@ hands.onResults(results=>{
   if(results.multiHandLandmarks && results.multiHandLandmarks.length){
     body.classList.add('hand-on');
     handState.textContent='Yes';
-    const lm = results.multiHandLandmarks[0];
+    const lmRaw = results.multiHandLandmarks[0];
+    const lm = smoothLandmarks(lmRaw);
     // draw
     drawConnectors(ctx, lm, HAND_CONNECTIONS, {color:'#00f0ff', lineWidth:2});
     drawLandmarks(ctx, lm, {color:'#7c3aed', lineWidth:1});
     // compute features and classify
     lastFeatures = computeFeatures(lm);
+    pushRollingFeature(lastFeatures);
     if(!recordingMode){
       const res = classify(lastFeatures, lm);
       const letter = res ? res.letter : '';
-      if(letter === stableLetter){
+      const confidence = res?.confidence ?? 0.5;
+      pushVote(letter, confidence);
+      const votedLetter = getWindowWinner() || letter;
+      if(votedLetter === stableLetter){
         stableCount++;
       } else {
-        stableLetter = letter; stableCount = 1;
+        stableLetter = votedLetter; stableCount = 1;
       }
       if(stableLetter && stableLetter !== '' && stableCount >= STABLE_REQUIRED){
         translated.textContent = stableLetter;
@@ -433,6 +516,9 @@ hands.onResults(results=>{
     body.classList.remove('hand-on');
     handState.textContent='No';
     lastFeatures = null;
+    smoothedLandmarks = null;
+    rollingFeatures.length = 0;
+    voteWindow.length = 0;
     translated.textContent = '—';
     // reset stability state
     stableLetter = ''; stableCount = 0;
@@ -551,8 +637,9 @@ function buildLetterGrid(){
 
 function captureSample(letter, btn, countEl){
   if(!lastFeatures){ alert('No hand detected. Position your hand in view.'); return; }
+  const sample = averagedRecentFeatures(8) || lastFeatures.slice();
   templates[letter] = templates[letter] || [];
-  templates[letter].push(lastFeatures.slice());
+  templates[letter].push(sample);
   saveTemplates();
   if(countEl) countEl.textContent = templates[letter].length + ' samples';
   // flash button
